@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RunRoute – Laufstrecken-Generator</title>
+
+<!-- Leaflet via CDN -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Chart.js for the elevation profile (Phase 2) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+<!-- Fonts: Archivo (UI) + IBM Plex Mono (watch-style readout) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --ink: #0e1b16;          /* deep forest ink */
+    --paper: #ffffff;
+    --muted: #5b6a63;
+    --line: #e3e8e5;
+    --signal: #e8490f;       /* high-vis signal orange */
+    --signal-dark: #c53a09;
+    --ok: #1d7a4f;
+    --radius: 14px;
+    --shadow: 0 10px 30px rgba(14, 27, 22, 0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: "Archivo", system-ui, sans-serif;
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  /* ---------- Map ---------- */
+  #map {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    cursor: crosshair;
+  }
+
+  /* ---------- Control panel ---------- */
+  #panel {
+    position: fixed;
+    z-index: 1000;
+    top: 16px;
+    left: 16px;
+    width: 320px;
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    background: var(--paper);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .brand h1 {
+    font-size: 22px;
+    font-weight: 900;
+    font-stretch: 80%;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .brand h1 .accent { color: var(--signal); }
+
+  .brand .tag {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .field label,
+  .field .label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  /* Distance slider with watch-style readout */
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--signal);
+    height: 24px;
+  }
+
+  .readout {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 18px;
+    min-width: 74px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout small {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .pace-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pace-row input {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    width: 70px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    text-align: center;
+  }
+
+  .pace-row span { font-size: 12px; color: var(--muted); }
+
+  /* API key management */
+  .key-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .key-row input {
+    flex: 1;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    min-width: 0;
+  }
+
+  .key-status {
+    flex: 1;
+    font-size: 13px;
+    color: var(--ok);
+    font-weight: 600;
+  }
+
+  .btn-small {
+    width: auto;
+    padding: 8px 12px;
+    font-size: 12px;
+    flex: 0 0 auto;
+  }
+
+  /* Elevation preference – segmented control */
+  .segments {
+    display: flex;
+    border: 1.5px solid var(--ink);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .segments label {
+    flex: 1;
+    margin: 0;
+  }
+
+  .segments input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .segments span {
+    display: block;
+    padding: 9px 4px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    color: var(--ink);
+    transition: background 0.15s ease;
+  }
+
+  .segments span:hover { background: #f3f5f4; }
+
+  .segments input:checked + span {
+    background: var(--ink);
+    color: #fff;
+  }
+
+  .segments input:focus-visible + span {
+    outline: 2px solid var(--signal);
+    outline-offset: -2px;
+  }
+
+  /* Elevation profile chart */
+  #chartWrap {
+    display: none;
+  }
+  #chartWrap.visible { display: block; }
+
+  #chartWrap canvas {
+    width: 100%;
+    height: 120px;
+  }
+
+  /* Buttons */
+  .btn {
+    appearance: none;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    width: 100%;
+    transition: background 0.15s ease, transform 0.05s ease;
+  }
+
+  .btn:active { transform: scale(0.99); }
+
+  .btn-primary {
+    background: var(--signal);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--signal-dark); }
+  .btn-primary:disabled {
+    background: var(--line);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+  }
+  .btn-secondary:hover { background: #f3f5f4; }
+  .btn-secondary:disabled {
+    border-color: var(--line);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+  }
+  .btn-row .btn { flex: 1; }
+
+  /* Status line */
+  #status {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  #status.error { color: var(--signal-dark); font-weight: 600; }
+  #status.ok { color: var(--ok); }
+
+  /* Result readout – styled like a GPS watch display */
+  #result {
+    display: none;
+    background: var(--ink);
+    color: #eef4f0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  #result.visible { display: block; }
+
+  #result .stats {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  #result .stat { text-align: center; flex: 1; }
+
+  #result .stat .value {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #result .stat .unit {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8fa39a;
+    margin-top: 2px;
+  }
+
+  /* Mobile: panel becomes a bottom sheet */
+  @media (max-width: 560px) {
+    #panel {
+      top: auto;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      border-radius: var(--radius) var(--radius) 0 0;
+      max-height: 60dvh;
+      padding: 14px 16px;
+      gap: 12px;
+    }
+    #map { cursor: pointer; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="map" aria-label="Karte"></div>
+
+<aside id="panel">
+  <div class="brand">
+    <h1>Run<span class="accent">Route</span></h1>
+    <span class="tag">Rundkurs-Generator</span>
+  </div>
+
+  <div class="field">
+    <span class="label">1 · Startpunkt</span>
+    <div id="status">Tippe auf die Karte, um deinen Startpunkt zu setzen.</div>
+  </div>
+
+  <div class="field">
+    <label for="distance">2 · Distanz</label>
+    <div class="dist-row">
+      <input type="range" id="distance" min="2" max="30" step="0.5" value="8" />
+      <div class="readout"><span id="distanceValue">8.0</span> <small>km</small></div>
+    </div>
+  </div>
+
+  <div class="field">
+    <span class="label">3 · Höhenmeter</span>
+    <div class="segments" role="radiogroup" aria-label="Höhenmeter-Präferenz">
+      <label><input type="radio" name="elevPref" value="flach" /><span>Flach</span></label>
+      <label><input type="radio" name="elevPref" value="egal" checked /><span>Egal</span></label>
+      <label><input type="radio" name="elevPref" value="huegelig" /><span>Hügelig</span></label>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="pace">Pace (für Zeitschätzung)</label>
+    <div class="pace-row">
+      <input type="text" id="pace" value="6:00" inputmode="numeric" aria-label="Pace in Minuten pro Kilometer" />
+      <span>min/km</span>
+    </div>
+  </div>
+
+  <div class="field" id="keyField">
+    <label for="keyInput">API-Key (openrouteservice.org)</label>
+    <div class="key-row" id="keyEntry">
+      <input type="password" id="keyInput" placeholder="Key einfügen …" autocomplete="off" />
+      <button class="btn btn-secondary btn-small" id="keySaveBtn">Speichern</button>
+    </div>
+    <div class="key-row" id="keySaved" hidden>
+      <span class="key-status" id="keyStatus">Key gespeichert</span>
+      <button class="btn btn-secondary btn-small" id="keyChangeBtn">Ändern</button>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="generateBtn" disabled>Route generieren</button>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" id="variantBtn" disabled>Neue Variante</button>
+    <button class="btn btn-secondary" id="gpxBtn" disabled>GPX laden</button>
+  </div>
+
+  <div id="result" aria-live="polite">
+    <div class="stats">
+      <div class="stat">
+        <div class="value" id="statDistance">–</div>
+        <span class="unit">km</span>
+      </div>
+      <div class="stat">
+        <div class="value" id="statDuration">–</div>
+        <span class="unit">Dauer</span>
+      </div>
+      <div class="stat">
+        <div class="value" id="statElevation">–</div>
+        <span class="unit">HM ↑/↓</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="chartWrap">
+    <canvas id="elevChart" aria-label="Höhenprofil der Route" role="img"></canvas>
+  </div>
+</aside>
+
+<script>
+/* =========================================================
+   RunRoute – Phase 1
+   Map + start point + ORS round-trip + GPX download
+   ========================================================= */
+
+// The ORS API key is NOT stored in this file. It lives in the browser's
+// localStorage and is entered once via the panel – so this file can be
+// shared or uploaded at any time without leaking credentials.
+const KEY_STORAGE = "runroute_ors_key";
+
+function getApiKey() {
+  return localStorage.getItem(KEY_STORAGE) || "";
+}
+
+function saveApiKey(key) {
+  localStorage.setItem(KEY_STORAGE, key.trim());
+}
+
+const ORS_URL = "https://api.openrouteservice.org/v2/directions/foot-walking/geojson";
+
+// ---------- App state ----------
+const state = {
+  start: null,        // L.LatLng of the chosen start point
+  seed: 1,            // ORS round-trip seed; new seed = new variant
+  routeGeoJSON: null, // last route (GeoJSON feature) for GPX export
+  routeLayer: null,   // Leaflet layer of the current route
+  startMarker: null,
+  chart: null,        // Chart.js instance of the elevation profile
+  loading: false,
+};
+
+// ---------- Map setup ----------
+// Default view: Munich – adjust freely, geolocation may override it
+const map = L.map("map").setView([48.137, 11.575], 13);
+
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+
+// Try to center on the user's position (silently ignore refusal)
+if ("geolocation" in navigator) {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 14),
+    () => {} // denied or unavailable – keep default view
+  );
+}
+
+// ---------- DOM refs ----------
+const el = {
+  status: document.getElementById("status"),
+  distance: document.getElementById("distance"),
+  distanceValue: document.getElementById("distanceValue"),
+  pace: document.getElementById("pace"),
+  generateBtn: document.getElementById("generateBtn"),
+  variantBtn: document.getElementById("variantBtn"),
+  gpxBtn: document.getElementById("gpxBtn"),
+  result: document.getElementById("result"),
+  statDistance: document.getElementById("statDistance"),
+  statDuration: document.getElementById("statDuration"),
+  statElevation: document.getElementById("statElevation"),
+  chartWrap: document.getElementById("chartWrap"),
+  elevChart: document.getElementById("elevChart"),
+  keyEntry: document.getElementById("keyEntry"),
+  keySaved: document.getElementById("keySaved"),
+  keyInput: document.getElementById("keyInput"),
+  keyStatus: document.getElementById("keyStatus"),
+  keySaveBtn: document.getElementById("keySaveBtn"),
+  keyChangeBtn: document.getElementById("keyChangeBtn"),
+};
+
+// ---------- UI helpers ----------
+function setStatus(message, type = "") {
+  el.status.textContent = message;
+  el.status.className = type; // "", "error" or "ok"
+}
+
+function setLoading(loading) {
+  state.loading = loading;
+  el.generateBtn.disabled = loading || !state.start;
+  el.variantBtn.disabled = loading || !state.routeGeoJSON;
+  el.gpxBtn.disabled = loading || !state.routeGeoJSON;
+  el.generateBtn.textContent = loading ? "Berechne …" : "Route generieren";
+}
+
+// ---------- Start point via map click ----------
+map.on("click", (e) => {
+  state.start = e.latlng;
+
+  if (state.startMarker) {
+    state.startMarker.setLatLng(e.latlng);
+  } else {
+    state.startMarker = L.marker(e.latlng).addTo(map);
+  }
+  state.startMarker.bindPopup("Startpunkt").openPopup();
+
+  el.generateBtn.disabled = false;
+  setStatus("Startpunkt gesetzt. Distanz wählen und Route generieren.", "ok");
+});
+
+// ---------- Distance slider ----------
+el.distance.addEventListener("input", () => {
+  el.distanceValue.textContent = Number(el.distance.value).toFixed(1);
+});
+
+// ---------- API key UI ----------
+function refreshKeyUI() {
+  const key = getApiKey();
+  const hasKey = key.length > 0;
+  el.keyEntry.hidden = hasKey;
+  el.keySaved.hidden = !hasKey;
+  if (hasKey) {
+    // Show only the last 4 chars so the panel never exposes the full key
+    el.keyStatus.textContent = `Key gespeichert (…${key.slice(-4)})`;
+  }
+}
+
+el.keySaveBtn.addEventListener("click", () => {
+  const key = el.keyInput.value.trim();
+  if (!key) {
+    setStatus("Bitte zuerst einen API-Key einfügen.", "error");
+    return;
+  }
+  saveApiKey(key);
+  el.keyInput.value = "";
+  refreshKeyUI();
+  setStatus("API-Key gespeichert. Er bleibt nur in diesem Browser.", "ok");
+});
+
+el.keyChangeBtn.addEventListener("click", () => {
+  localStorage.removeItem(KEY_STORAGE);
+  refreshKeyUI();
+  el.keyInput.focus();
+});
+
+refreshKeyUI();
+
+// ---------- Route generation ----------
+const CANDIDATE_COUNT = 5; // seeds per click when filtering by elevation (free-tier friendly)
+
+function elevationPref() {
+  return document.querySelector('input[name="elevPref"]:checked').value;
+}
+
+// Fetch a single round-trip route for a given seed. Returns the GeoJSON feature.
+async function fetchRoute(apiKey, targetMeters, seed) {
+  const body = {
+    // ORS expects [lon, lat] – Leaflet uses [lat, lng]!
+    coordinates: [[state.start.lng, state.start.lat]],
+    elevation: true, // response coords become [lon, lat, ele]
+    options: {
+      round_trip: {
+        length: targetMeters,
+        points: 4,
+        seed: seed,
+      },
+    },
+  };
+
+  const response = await fetch(ORS_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    // Try to surface the ORS error message for easier debugging
+    let detail = "";
+    try {
+      const errJson = await response.json();
+      detail = errJson?.error?.message || JSON.stringify(errJson.error) || "";
+    } catch (_) { /* body not JSON – ignore */ }
+    if (response.status === 401 || response.status === 403) {
+      detail += " – Key ungültig? Über „Ändern“ neu eintragen.";
+    }
+    throw new Error(`ORS ${response.status}: ${detail || response.statusText}`);
+  }
+
+  const geojson = await response.json();
+  const feature = geojson.features?.[0];
+  if (!feature) throw new Error("ORS-Antwort enthält keine Route.");
+  return feature;
+}
+
+async function generateRoute({ newSeed } = {}) {
+  if (!state.start) return;
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    setStatus("Kein API-Key hinterlegt. Oben im Panel eintragen (kostenloser Key auf openrouteservice.org).", "error");
+    return;
+  }
+
+  if (newSeed) {
+    // Random seed → different route(s) with identical settings
+    state.seed = Math.floor(Math.random() * 100000);
+  }
+
+  const targetMeters = Number(el.distance.value) * 1000;
+  const pref = elevationPref();
+
+  setLoading(true);
+
+  try {
+    let chosen;
+    let note = "";
+
+    if (pref === "egal") {
+      // Single request – behaves like Phase 1
+      setStatus("Route wird berechnet …");
+      chosen = await fetchRoute(apiKey, targetMeters, state.seed);
+    } else {
+      // Generate several candidates with different seeds, pick by elevation gain
+      setStatus(`Berechne ${CANDIDATE_COUNT} Varianten und vergleiche Höhenmeter …`);
+      const seeds = Array.from({ length: CANDIDATE_COUNT }, (_, i) => state.seed + i * 7919);
+
+      const settled = await Promise.allSettled(
+        seeds.map((seed) => fetchRoute(apiKey, targetMeters, seed))
+      );
+      const candidates = settled
+        .filter((r) => r.status === "fulfilled")
+        .map((r) => r.value);
+
+      if (candidates.length === 0) {
+        // All failed – surface the first error
+        throw settled[0].reason;
+      }
+
+      // Rank by smoothed elevation gain
+      candidates.forEach((c) => {
+        c._gain = computeGains(c.geometry.coordinates).ascent;
+      });
+      candidates.sort((a, b) => a._gain - b._gain);
+
+      chosen = pref === "flach" ? candidates[0] : candidates[candidates.length - 1];
+
+      const gains = candidates.map((c) => Math.round(c._gain));
+      note = ` ${pref === "flach" ? "Flachste" : "Hügeligste"} von ${candidates.length} Varianten (Spanne ${gains[0]}–${gains[gains.length - 1]} hm).`;
+    }
+
+    state.routeGeoJSON = chosen;
+    drawRoute(chosen);
+    showStats(chosen);
+    renderElevationChart(chosen);
+    setStatus(`Route bereit.${note} „Neue Variante“ probiert andere Verläufe.`, "ok");
+  } catch (err) {
+    console.error("Route generation failed:", err);
+    setStatus(`Fehler: ${err.message} – Details in der Browser-Konsole (F12).`, "error");
+  } finally {
+    setLoading(false);
+  }
+}
+
+function drawRoute(feature) {
+  if (state.routeLayer) map.removeLayer(state.routeLayer);
+
+  state.routeLayer = L.geoJSON(feature, {
+    style: {
+      color: "#e8490f",
+      weight: 5,
+      opacity: 0.9,
+    },
+  }).addTo(map);
+
+  map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+}
+
+// ---------- Stats display ----------
+function showStats(feature) {
+  const summary = feature.properties?.summary || {};
+  const distanceKm = (summary.distance || 0) / 1000;
+
+  // Smoothed gains – raw SRTM data is noisy and inflates cumulative ascent
+  const gains = computeGains(feature.geometry.coordinates);
+
+  el.statDistance.textContent = distanceKm.toFixed(2);
+  el.statDuration.textContent = formatDuration(distanceKm * paceSecondsPerKm());
+  el.statElevation.textContent = `${Math.round(gains.ascent)}/${Math.round(gains.descent)}`;
+  el.result.classList.add("visible");
+
+  // Warn if the round trip deviates a lot from the requested length
+  const target = Number(el.distance.value);
+  const deviation = Math.abs(distanceKm - target) / target;
+  if (deviation > 0.15) {
+    setStatus(
+      `Hinweis: Route ist ${distanceKm.toFixed(1)} km statt ${target.toFixed(1)} km – ORS-Rundkurse weichen manchmal ab. „Neue Variante“ versuchen.`,
+    );
+  }
+}
+
+// ---------- Elevation math ----------
+// Raw elevation data (SRTM-based) carries ±1-3 m noise per point. Summing every
+// positive diff inflates ascent massively (the "199 hm in flat Munich" effect).
+// Fix: moving-average smoothing + hysteresis threshold, like GPS watches do.
+
+const SMOOTH_WINDOW = 7;        // moving average window (points)
+const GAIN_THRESHOLD = 2.0;     // metres a climb must exceed before it counts
+
+function smoothElevations(coords) {
+  // coords: [[lon, lat, ele], ...] → smoothed elevation array
+  const eles = coords.map((c) => c[2] || 0);
+  const half = Math.floor(SMOOTH_WINDOW / 2);
+  const smoothed = new Array(eles.length);
+
+  for (let i = 0; i < eles.length; i++) {
+    const from = Math.max(0, i - half);
+    const to = Math.min(eles.length - 1, i + half);
+    let sum = 0;
+    for (let j = from; j <= to; j++) sum += eles[j];
+    smoothed[i] = sum / (to - from + 1);
+  }
+  return smoothed;
+}
+
+function computeGains(coords) {
+  // Hysteresis accumulator: only elevation changes larger than the threshold
+  // (relative to the last accepted reference) count as real ascent/descent.
+  const smoothed = smoothElevations(coords);
+  let ascent = 0;
+  let descent = 0;
+  let ref = smoothed[0] || 0;
+
+  for (let i = 1; i < smoothed.length; i++) {
+    const diff = smoothed[i] - ref;
+    if (diff >= GAIN_THRESHOLD) {
+      ascent += diff;
+      ref = smoothed[i];
+    } else if (diff <= -GAIN_THRESHOLD) {
+      descent += -diff;
+      ref = smoothed[i];
+    }
+  }
+  return { ascent, descent };
+}
+
+// Haversine distance in metres between two [lon, lat] points
+function haversine(a, b) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// ---------- Elevation profile chart ----------
+function renderElevationChart(feature) {
+  const coords = feature.geometry.coordinates;
+  const smoothed = smoothElevations(coords);
+
+  // Cumulative distance along the route (km) as X axis
+  const dist = new Array(coords.length);
+  dist[0] = 0;
+  for (let i = 1; i < coords.length; i++) {
+    dist[i] = dist[i - 1] + haversine(coords[i - 1], coords[i]);
+  }
+
+  // Downsample to ~150 points – keeps the chart snappy on mobile
+  const step = Math.max(1, Math.floor(coords.length / 150));
+  const points = [];
+  for (let i = 0; i < coords.length; i += step) {
+    points.push({ x: dist[i] / 1000, y: smoothed[i] });
+  }
+  // Always include the final point so the loop closes visually
+  points.push({ x: dist[dist.length - 1] / 1000, y: smoothed[smoothed.length - 1] });
+
+  if (state.chart) state.chart.destroy();
+
+  state.chart = new Chart(el.elevChart, {
+    type: "line",
+    data: {
+      datasets: [{
+        data: points,
+        borderColor: "#e8490f",
+        backgroundColor: "rgba(232, 73, 15, 0.12)",
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.25,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false,
+          callbacks: {
+            title: (items) => `km ${items[0].parsed.x.toFixed(1)}`,
+            label: (item) => `${Math.round(item.parsed.y)} m`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: false },
+          ticks: {
+            font: { family: "'IBM Plex Mono', monospace", size: 10 },
+            callback: (v) => `${v} km`,
+            maxTicksLimit: 6,
+          },
+          grid: { display: false },
+        },
+        y: {
+          ticks: {
+            font: { family: "'IBM Plex Mono', monospace", size: 10 },
+            callback: (v) => `${v} m`,
+            maxTicksLimit: 4,
+          },
+          grid: { color: "#eef1ef" },
+        },
+      },
+    },
+  });
+
+  el.chartWrap.classList.add("visible");
+}
+
+function paceSecondsPerKm() {
+  // Parse "m:ss" or plain minutes; fall back to 6:00 min/km
+  const raw = el.pace.value.trim();
+  const match = raw.match(/^(\d{1,2})(?::([0-5]?\d))?$/);
+  if (!match) return 360;
+  return Number(match[1]) * 60 + Number(match[2] || 0);
+}
+
+function formatDuration(totalSeconds) {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.round((totalSeconds % 3600) / 60);
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}h` : `${m}min`;
+}
+
+// ---------- GPX export ----------
+function downloadGPX() {
+  if (!state.routeGeoJSON) return;
+
+  const coords = state.routeGeoJSON.geometry.coordinates;
+  const points = coords
+    .map(([lon, lat, ele]) => {
+      const eleTag = ele != null ? `<ele>${ele.toFixed(1)}</ele>` : "";
+      return `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}">${eleTag}</trkpt>`;
+    })
+    .join("\n");
+
+  const distanceKm = ((state.routeGeoJSON.properties?.summary?.distance || 0) / 1000).toFixed(1);
+  const date = new Date().toISOString().slice(0, 10);
+  const name = `RunRoute ${distanceKm} km`;
+
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="RunRoute" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>${name}</name>
+    <trkseg>
+${points}
+    </trkseg>
+  </trk>
+</gpx>`;
+
+  const blob = new Blob([gpx], { type: "application/gpx+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `runroute-${date}-${distanceKm}km.gpx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- Wire up buttons ----------
+el.generateBtn.addEventListener("click", () => generateRoute());
+el.variantBtn.addEventListener("click", () => generateRoute({ newSeed: true }));
+el.gpxBtn.addEventListener("click", downloadGPX);
+</script>
+</body>
+</html>
