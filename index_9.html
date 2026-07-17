@@ -1,0 +1,2026 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RunRoute – Laufstrecken-Generator</title>
+
+<!-- Leaflet via CDN -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Chart.js for the elevation profile (Phase 2) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+<!-- Fonts: Archivo (UI) + IBM Plex Mono (watch-style readout) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --ink: #0e1b16;          /* deep forest ink */
+    --paper: #ffffff;
+    --muted: #5b6a63;
+    --line: #e3e8e5;
+    --signal: #e8490f;       /* high-vis signal orange */
+    --signal-dark: #c53a09;
+    --ok: #1d7a4f;
+    --radius: 14px;
+    --shadow: 0 10px 30px rgba(14, 27, 22, 0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: "Archivo", system-ui, sans-serif;
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  /* ---------- Map ---------- */
+  #map {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    cursor: crosshair;
+  }
+
+  /* ---------- Control panel ---------- */
+  #panel {
+    position: fixed;
+    z-index: 1000;
+    top: 16px;
+    left: 16px;
+    width: 320px;
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    background: var(--paper);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .brand h1 {
+    font-size: 22px;
+    font-weight: 900;
+    font-stretch: 80%;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .brand h1 .accent { color: var(--signal); }
+
+  .brand .tag {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .field label,
+  .field .label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  /* Distance slider with watch-style readout */
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--signal);
+    height: 24px;
+  }
+
+  .readout {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 18px;
+    min-width: 74px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout small {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .pace-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pace-row input {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    width: 70px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    text-align: center;
+  }
+
+  .pace-row span { font-size: 12px; color: var(--muted); }
+
+  /* API key management */
+  .key-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .key-row input {
+    flex: 1;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    min-width: 0;
+  }
+
+  textarea#aiWish {
+    width: 100%;
+    font-family: inherit;
+    font-size: 14px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    resize: vertical;
+    min-height: 52px;
+  }
+
+  textarea#aiWish:focus-visible {
+    outline: 2px solid var(--signal);
+    border-color: transparent;
+  }
+
+  /* Workout selection & plan */
+  select#workout {
+    width: 100%;
+    font-family: inherit;
+    font-size: 14px;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+  }
+
+  #planBox {
+    margin-top: 8px;
+    background: #f6f8f7;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  #planBox .plan-total {
+    font-weight: 700;
+    margin-top: 4px;
+  }
+
+  .pace-label {
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 62px;
+  }
+
+  /* Saved routes */
+  .fav-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .fav-row:last-child { border-bottom: none; }
+
+  .fav-name {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.35;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .fav-name small {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .key-status {
+    flex: 1;
+    font-size: 13px;
+    color: var(--ok);
+    font-weight: 600;
+  }
+
+  .btn-small {
+    width: auto;
+    padding: 8px 12px;
+    font-size: 12px;
+    flex: 0 0 auto;
+  }
+
+  /* Elevation preference – segmented control */
+  .segments {
+    display: flex;
+    border: 1.5px solid var(--ink);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .segments label {
+    flex: 1;
+    margin: 0;
+  }
+
+  .segments input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .segments span {
+    display: block;
+    padding: 9px 4px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    color: var(--ink);
+    transition: background 0.15s ease;
+  }
+
+  .segments span:hover { background: #f3f5f4; }
+
+  .segments input:checked + span {
+    background: var(--ink);
+    color: #fff;
+  }
+
+  .segments input:focus-visible + span {
+    outline: 2px solid var(--signal);
+    outline-offset: -2px;
+  }
+
+  .segments-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* Elevation profile chart */
+  #chartWrap {
+    display: none;
+  }
+  #chartWrap.visible { display: block; }
+
+  #chartWrap canvas {
+    width: 100%;
+    height: 120px;
+  }
+
+  /* Buttons */
+  .btn {
+    appearance: none;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    width: 100%;
+    transition: background 0.15s ease, transform 0.05s ease;
+  }
+
+  .btn:active { transform: scale(0.99); }
+
+  .btn-primary {
+    background: var(--signal);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--signal-dark); }
+  .btn-primary:disabled {
+    background: var(--line);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+  }
+  .btn-secondary:hover { background: #f3f5f4; }
+  .btn-secondary:disabled {
+    border-color: var(--line);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+  }
+  .btn-row .btn { flex: 1; }
+
+  /* Status line */
+  #status {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  #status.error { color: var(--signal-dark); font-weight: 600; }
+  #status.ok { color: var(--ok); }
+
+  /* Result readout – styled like a GPS watch display */
+  #result {
+    display: none;
+    background: var(--ink);
+    color: #eef4f0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  #result.visible { display: block; }
+
+  #result .stats {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  #result .stat { text-align: center; flex: 1; }
+
+  #result .stat .value {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #result .stat .unit {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8fa39a;
+    margin-top: 2px;
+  }
+
+  /* Mobile: panel becomes a bottom sheet */
+  @media (max-width: 560px) {
+    #panel {
+      top: auto;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      border-radius: var(--radius) var(--radius) 0 0;
+      max-height: 60dvh;
+      padding: 14px 16px;
+      gap: 12px;
+    }
+    #map { cursor: pointer; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="map" aria-label="Karte"></div>
+
+<aside id="panel">
+  <div class="brand">
+    <h1>Run<span class="accent">Route</span></h1>
+    <span class="tag">Rundkurs-Generator</span>
+  </div>
+
+  <div class="field">
+    <span class="label">1 · Startpunkt</span>
+    <div id="status">Tippe auf die Karte, um deinen Startpunkt zu setzen.</div>
+  </div>
+
+  <div class="field">
+    <label for="distance">2 · Distanz</label>
+    <div class="dist-row">
+      <input type="range" id="distance" min="2" max="30" step="0.5" value="8" />
+      <div class="readout"><span id="distanceValue">8.0</span> <small>km</small></div>
+    </div>
+    <div class="pace-row" style="margin-top:8px">
+      <span>oder Zeit:</span>
+      <input type="text" id="duration" placeholder="45 / 1:10" inputmode="numeric" aria-label="Gesamtzeit in Minuten oder h:mm" />
+      <span id="durationHint">min → km über Pace</span>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="workout">Einheit (optional)</label>
+    <select id="workout">
+      <option value="frei" selected>Frei – nur Strecke</option>
+      <option value="zone2">Zone 2 / Locker</option>
+      <option value="schwelle">Schwelle</option>
+      <option value="intervalle">Intervalle</option>
+      <option value="langerlauf">Langer Lauf</option>
+    </select>
+    <div id="planBox" hidden></div>
+  </div>
+
+  <div class="field">
+    <span class="label">3 · Höhenmeter</span>
+    <div class="segments" role="radiogroup" aria-label="Höhenmeter-Präferenz">
+      <label><input type="radio" name="elevPref" value="flach" /><span>Flach</span></label>
+      <label><input type="radio" name="elevPref" value="egal" checked /><span>Egal</span></label>
+      <label><input type="radio" name="elevPref" value="huegelig" /><span>Hügelig</span></label>
+    </div>
+  </div>
+
+  <div class="field">
+    <span class="label">4 · Charakter</span>
+    <div class="segments" role="radiogroup" aria-label="Strecken-Charakter">
+      <label><input type="radio" name="charPref" value="standard" checked /><span>Standard</span></label>
+      <label><input type="radio" name="charPref" value="sightseeing" /><span>Sightseeing</span></label>
+      <label><input type="radio" name="charPref" value="gruen" /><span>Grün</span></label>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="pace">Pace (für Zeitschätzung)</label>
+    <div class="pace-row">
+      <input type="text" id="pace" value="6:00" inputmode="numeric" aria-label="Pace in Minuten pro Kilometer" />
+      <span>min/km</span>
+    </div>
+  </div>
+
+  <div class="field">
+    <span class="label">Trainings-Paces (min/km, für Einheiten)</span>
+    <div class="pace-row"><span class="pace-label">Locker</span><input type="text" id="paceEasy" value="6:30" inputmode="numeric" aria-label="Lockere Pace" /></div>
+    <div class="pace-row" style="margin-top:6px"><span class="pace-label">Schwelle</span><input type="text" id="paceThr" value="5:30" inputmode="numeric" aria-label="Schwellen-Pace" /></div>
+    <div class="pace-row" style="margin-top:6px"><span class="pace-label">Intervall</span><input type="text" id="paceInt" value="5:00" inputmode="numeric" aria-label="Intervall-Pace" /></div>
+  </div>
+
+  <div class="field" id="keyField">
+    <label for="keyInput">API-Key (openrouteservice.org)</label>
+    <div class="key-row" id="keyEntry">
+      <input type="password" id="keyInput" placeholder="Key einfügen …" autocomplete="off" />
+      <button class="btn btn-secondary btn-small" id="keySaveBtn">Speichern</button>
+    </div>
+    <div class="key-row" id="keySaved" hidden>
+      <span class="key-status" id="keyStatus">Key gespeichert</span>
+      <button class="btn btn-secondary btn-small" id="keyChangeBtn">Ändern</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="aiWish">5 · Wunsch-Lauf (KI, optional)</label>
+    <textarea id="aiWish" rows="2" placeholder="z.B. 12 km, gern eine Statue und ein Schloss sehen"></textarea>
+    <button class="btn btn-secondary" id="aiBtn" style="margin-top:8px">Wunsch verstehen &amp; generieren</button>
+    <div class="key-row" id="aiKeyEntry" style="margin-top:8px">
+      <input type="password" id="aiKeyInput" placeholder="KI-Key: Gemini (gratis) oder Anthropic" autocomplete="off" />
+      <button class="btn btn-secondary btn-small" id="aiKeySaveBtn">Speichern</button>
+    </div>
+    <div class="key-row" id="aiKeySaved" hidden style="margin-top:8px">
+      <span class="key-status" id="aiKeyStatus">KI-Key gespeichert</span>
+      <button class="btn btn-secondary btn-small" id="aiKeyChangeBtn">Ändern</button>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="generateBtn" disabled>Route generieren</button>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" id="variantBtn" disabled>Neue Variante</button>
+    <button class="btn btn-secondary" id="gpxBtn" disabled>GPX laden</button>
+  </div>
+
+  <div id="result" aria-live="polite">
+    <div class="stats">
+      <div class="stat">
+        <div class="value" id="statDistance">–</div>
+        <span class="unit">km</span>
+      </div>
+      <div class="stat">
+        <div class="value" id="statDuration">–</div>
+        <span class="unit">Dauer</span>
+      </div>
+      <div class="stat">
+        <div class="value" id="statElevation">–</div>
+        <span class="unit">HM ↑/↓</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="chartWrap">
+    <canvas id="elevChart" aria-label="Höhenprofil der Route" role="img"></canvas>
+  </div>
+
+  <button class="btn btn-secondary" id="favSaveBtn" disabled>★ Route speichern</button>
+
+  <div class="field" id="favField" hidden>
+    <span class="label">Gespeicherte Strecken</span>
+    <div id="favList"></div>
+  </div>
+</aside>
+
+<script>
+/* =========================================================
+   RunRoute – Phasen 1-4 + Flächen-Traversal
+   Round trips, elevation filter, sightseeing/green POIs via
+   Overpass, green routing weight, large areas run lengthwise
+   ========================================================= */
+
+// The ORS API key is NOT stored in this file. It lives in the browser's
+// localStorage and is entered once via the panel – so this file can be
+// shared or uploaded at any time without leaking credentials.
+const KEY_STORAGE = "runroute_ors_key";
+const AI_KEY_STORAGE = "runroute_anthropic_key";
+
+function getApiKey() {
+  return localStorage.getItem(KEY_STORAGE) || "";
+}
+
+function saveApiKey(key) {
+  localStorage.setItem(KEY_STORAGE, key.trim());
+}
+
+function getAiKey() {
+  return localStorage.getItem(AI_KEY_STORAGE) || "";
+}
+
+function saveAiKey(key) {
+  localStorage.setItem(AI_KEY_STORAGE, key.trim());
+}
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_MODEL = "claude-haiku-4-5"; // cheapest model – intent parsing is a tiny task
+const GEMINI_MODEL = "gemini-2.5-flash-lite"; // free tier, highest quota – plenty for parsing
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+// Which provider does a key belong to? Anthropic keys start with "sk-ant",
+// Google AI Studio keys with "AIza" – lets one field accept both.
+function aiProvider(key) {
+  if (key.startsWith("AIza")) return "gemini";
+  return "anthropic";
+}
+
+const ORS_URL = "https://api.openrouteservice.org/v2/directions/foot-walking/geojson";
+// Several public Overpass mirrors – the main instance often returns 429/504
+// under load, so we fail over instead of failing the user
+const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+];
+
+// ---------- App state ----------
+const state = {
+  start: null,        // L.LatLng of the chosen start point
+  seed: 1,            // ORS round-trip seed; new seed = new variant
+  routeGeoJSON: null, // last route (GeoJSON feature) for GPX export
+  routeLayer: null,   // Leaflet layer of the current route
+  startMarker: null,
+  poiLayer: null,     // Leaflet layer group of sightseeing POI markers
+  poiCache: new Map(),// Overpass results per "lat,lng,radius" – fair use: cache!
+  greenWeightingBroken: false, // set after ORS rejects it (400) → skip straight to waypoint fallback
+  greenLengthFactor: 0.65,     // green detours stretch routes ~1.5x → request shorter; self-calibrates
+  poiFocus: null,              // Set of POI kinds the AI wish asked for (e.g. "denkmal", "schloss")
+  chart: null,        // Chart.js instance of the elevation profile
+  loading: false,
+};
+
+// ---------- Map setup ----------
+// Default view: Munich – adjust freely, geolocation may override it
+const map = L.map("map").setView([48.137, 11.575], 13);
+
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+
+// Try to center on the user's position (silently ignore refusal)
+if ("geolocation" in navigator) {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 14),
+    () => {} // denied or unavailable – keep default view
+  );
+}
+
+// ---------- DOM refs ----------
+const el = {
+  status: document.getElementById("status"),
+  distance: document.getElementById("distance"),
+  distanceValue: document.getElementById("distanceValue"),
+  duration: document.getElementById("duration"),
+  durationHint: document.getElementById("durationHint"),
+  workout: document.getElementById("workout"),
+  planBox: document.getElementById("planBox"),
+  paceEasy: document.getElementById("paceEasy"),
+  paceThr: document.getElementById("paceThr"),
+  paceInt: document.getElementById("paceInt"),
+  pace: document.getElementById("pace"),
+  generateBtn: document.getElementById("generateBtn"),
+  variantBtn: document.getElementById("variantBtn"),
+  gpxBtn: document.getElementById("gpxBtn"),
+  result: document.getElementById("result"),
+  statDistance: document.getElementById("statDistance"),
+  statDuration: document.getElementById("statDuration"),
+  statElevation: document.getElementById("statElevation"),
+  chartWrap: document.getElementById("chartWrap"),
+  elevChart: document.getElementById("elevChart"),
+  keyEntry: document.getElementById("keyEntry"),
+  keySaved: document.getElementById("keySaved"),
+  keyInput: document.getElementById("keyInput"),
+  keyStatus: document.getElementById("keyStatus"),
+  keySaveBtn: document.getElementById("keySaveBtn"),
+  keyChangeBtn: document.getElementById("keyChangeBtn"),
+  aiWish: document.getElementById("aiWish"),
+  aiBtn: document.getElementById("aiBtn"),
+  aiKeyEntry: document.getElementById("aiKeyEntry"),
+  aiKeySaved: document.getElementById("aiKeySaved"),
+  aiKeyInput: document.getElementById("aiKeyInput"),
+  aiKeyStatus: document.getElementById("aiKeyStatus"),
+  aiKeySaveBtn: document.getElementById("aiKeySaveBtn"),
+  aiKeyChangeBtn: document.getElementById("aiKeyChangeBtn"),
+  favSaveBtn: document.getElementById("favSaveBtn"),
+  favField: document.getElementById("favField"),
+  favList: document.getElementById("favList"),
+};
+
+// ---------- UI helpers ----------
+function setStatus(message, type = "") {
+  el.status.textContent = message;
+  el.status.className = type; // "", "error" or "ok"
+}
+
+function setLoading(loading) {
+  state.loading = loading;
+  el.generateBtn.disabled = loading || !state.start;
+  el.variantBtn.disabled = loading || !state.routeGeoJSON;
+  el.gpxBtn.disabled = loading || !state.routeGeoJSON;
+  el.favSaveBtn.disabled = loading || !state.routeGeoJSON;
+  el.generateBtn.textContent = loading ? "Berechne …" : "Route generieren";
+}
+
+// ---------- Start point via map click ----------
+map.on("click", (e) => {
+  state.start = e.latlng;
+
+  if (state.startMarker) {
+    state.startMarker.setLatLng(e.latlng);
+  } else {
+    state.startMarker = L.marker(e.latlng).addTo(map);
+  }
+  state.startMarker.bindPopup("Startpunkt").openPopup();
+
+  el.generateBtn.disabled = false;
+  setStatus("Startpunkt gesetzt. Distanz wählen und Route generieren.", "ok");
+});
+
+// ---------- Distance slider ----------
+el.distance.addEventListener("input", () => {
+  el.distanceValue.textContent = Number(el.distance.value).toFixed(1);
+  syncDurationFromDistance();
+});
+
+// ---------- Time-based distance (Phase 7a) ----------
+// "I have 60 minutes at 5:30 pace" → distance follows from time & pace.
+// Accepts plain minutes ("45") or h:mm ("1:10"). Returns minutes or null.
+function parseDurationMinutes(raw) {
+  const match = raw.trim().match(/^(\d{1,2})(?::([0-5]?\d))?$/);
+  if (!match) return null;
+  // With a colon it reads as h:mm, without as plain minutes
+  return match[2] != null
+    ? Number(match[1]) * 60 + Number(match[2])
+    : Number(match[1]);
+}
+
+el.duration.addEventListener("input", () => {
+  // With an active workout the time drives the PLAN (profile paces per segment)
+  if (el.workout.value !== "frei") {
+    updateWorkoutPlan();
+    const minutes = parseDurationMinutes(el.duration.value);
+    el.durationHint.textContent = minutes ? "→ Plan angepasst" : "min → km über Pace";
+    return;
+  }
+
+  const minutes = parseDurationMinutes(el.duration.value);
+  if (minutes == null || minutes <= 0) {
+    el.durationHint.textContent = "min → km über Pace";
+    return;
+  }
+  const km = (minutes * 60) / paceSecondsPerKm();
+  const clamped = Math.min(30, Math.max(2, Math.round(km * 2) / 2)); // slider raster 0.5
+  el.distance.value = clamped;
+  el.distanceValue.textContent = clamped.toFixed(1);
+
+  el.durationHint.textContent = km < 2 || km > 30
+    ? `→ ${km.toFixed(1)} km (begrenzt auf ${clamped.toFixed(1)})`
+    : `→ ${clamped.toFixed(1)} km bei Pace ${el.pace.value}`;
+});
+
+// Pace changes re-derive the distance while a duration is entered
+el.pace.addEventListener("input", () => {
+  if (parseDurationMinutes(el.duration.value) != null) {
+    el.duration.dispatchEvent(new Event("input"));
+  }
+});
+
+// Moving the slider takes over → duration field clears (distance is boss again)
+function syncDurationFromDistance() {
+  if (el.duration.value.trim() !== "") {
+    el.duration.value = "";
+    el.durationHint.textContent = "min → km über Pace";
+  }
+}
+
+// ---------- Training units (Phase 7b) ----------
+// Deterministic workout templates scaled to the available time. Paces come
+// from the user's profile (localStorage) – no formulas pretending precision.
+const PROFILE_STORAGE = "runroute_profile";
+const WORKOUT_DEFAULT_MIN = { zone2: 35, schwelle: 40, intervalle: 40, langerlauf: 70 };
+
+function parsePace(raw, fallbackSec) {
+  const match = String(raw).trim().match(/^(\d{1,2})(?::([0-5]?\d))?$/);
+  if (!match) return fallbackSec;
+  return Number(match[1]) * 60 + Number(match[2] || 0);
+}
+
+function loadProfile() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PROFILE_STORAGE) || "{}");
+    return {
+      locker: p.locker || "6:30",
+      schwelle: p.schwelle || "5:30",
+      intervall: p.intervall || "5:00",
+    };
+  } catch (_) {
+    return { locker: "6:30", schwelle: "5:30", intervall: "5:00" };
+  }
+}
+
+function persistProfile() {
+  localStorage.setItem(PROFILE_STORAGE, JSON.stringify({
+    locker: el.paceEasy.value.trim(),
+    schwelle: el.paceThr.value.trim(),
+    intervall: el.paceInt.value.trim(),
+  }));
+}
+
+// Beginner-friendly scaling: short warm-ups, few reps at low volume,
+// everything works from ~30 minutes upward. Leftover time → cool-down.
+function buildWorkoutPlan(type, totalMin, profile) {
+  const easySec = parsePace(profile.locker, 390);
+  const thrSec = parsePace(profile.schwelle, 330);
+  const intSec = parsePace(profile.intervall, 300);
+  const kmOf = (min, paceSec) => (min * 60) / paceSec;
+
+  const segments = [];
+
+  if (type === "zone2" || type === "langerlauf") {
+    const min = Math.max(20, totalMin);
+    segments.push({ label: type === "zone2" ? "Zone 2 durchgehend" : "Langer Lauf, locker", min, pace: profile.locker, km: kmOf(min, easySec) });
+  } else {
+    const warm = Math.min(15, Math.max(10, Math.round(totalMin * 0.3)));
+    let cool = Math.min(10, Math.max(5, Math.round(totalMin * 0.2)));
+    const core = Math.max(8, totalMin - warm - cool);
+
+    let reps, work, rest, workPaceStr, workPaceSec, workLabel;
+    if (type === "schwelle") {
+      work = core < 26 ? 6 : 8;             // beginners: 6-min blocks
+      rest = 2;
+      reps = Math.min(4, Math.max(2, Math.floor((core + rest) / (work + rest))));
+      workPaceStr = profile.schwelle; workPaceSec = thrSec; workLabel = "Schwelle";
+    } else { // intervalle
+      work = 2;                              // gentle 2-min reps
+      rest = 2;
+      reps = Math.min(8, Math.max(3, Math.floor((core + rest) / (work + rest))));
+      workPaceStr = profile.intervall; workPaceSec = intSec; workLabel = "schnell";
+    }
+
+    const coreUsed = reps * work + (reps - 1) * rest;
+    cool += Math.max(0, core - coreUsed);   // leftover time → easy cool-down
+
+    segments.push({ label: "Einlaufen, locker", min: warm, pace: profile.locker, km: kmOf(warm, easySec) });
+    segments.push({
+      label: `${reps} × ${work} min ${workLabel} (${rest} min Trab dazwischen)`,
+      min: coreUsed,
+      pace: workPaceStr,
+      km: kmOf(reps * work, workPaceSec) + kmOf((reps - 1) * rest, easySec),
+    });
+    segments.push({ label: "Auslaufen, locker", min: cool, pace: profile.locker, km: kmOf(cool, easySec) });
+  }
+
+  const totalKm = segments.reduce((s, seg) => s + seg.km, 0);
+  const totalTime = segments.reduce((s, seg) => s + seg.min, 0);
+  return { segments, totalKm, totalMin: totalTime };
+}
+
+function updateWorkoutPlan() {
+  const type = el.workout.value;
+  if (type === "frei") {
+    el.planBox.hidden = true;
+    return;
+  }
+
+  const wished = parseDurationMinutes(el.duration.value);
+  const totalMin = wished && wished > 0 ? wished : WORKOUT_DEFAULT_MIN[type];
+  const plan = buildWorkoutPlan(type, totalMin, loadProfile());
+
+  // Distance follows from the plan
+  const clamped = Math.min(30, Math.max(2, Math.round(plan.totalKm * 2) / 2));
+  el.distance.value = clamped;
+  el.distanceValue.textContent = clamped.toFixed(1);
+
+  // Tempo work wants flat ground – auto-select unless the control is disabled
+  if (type === "schwelle" || type === "intervalle") {
+    const flach = document.querySelector('input[name="elevPref"][value="flach"]');
+    if (flach && !flach.disabled) flach.checked = true;
+  }
+
+  el.planBox.innerHTML = "";
+  for (const seg of plan.segments) {
+    const row = document.createElement("div");
+    row.textContent = `${seg.label} · ${Math.round(seg.min)} min @ ${seg.pace} · ${seg.km.toFixed(1)} km`;
+    el.planBox.appendChild(row);
+  }
+  const total = document.createElement("div");
+  total.className = "plan-total";
+  total.textContent = `Gesamt ≈ ${plan.totalKm.toFixed(1)} km · ${Math.round(plan.totalMin)} min`;
+  el.planBox.appendChild(total);
+  el.planBox.hidden = false;
+}
+
+el.workout.addEventListener("change", updateWorkoutPlan);
+[el.paceEasy, el.paceThr, el.paceInt].forEach((input) => {
+  input.addEventListener("change", () => {
+    persistProfile();
+    updateWorkoutPlan();
+  });
+});
+
+// Restore saved profile paces on start
+(function initProfile() {
+  const p = loadProfile();
+  el.paceEasy.value = p.locker;
+  el.paceThr.value = p.schwelle;
+  el.paceInt.value = p.intervall;
+})();
+
+// ---------- API key UI ----------
+function refreshKeyUI() {
+  const key = getApiKey();
+  const hasKey = key.length > 0;
+  el.keyEntry.hidden = hasKey;
+  el.keySaved.hidden = !hasKey;
+  if (hasKey) {
+    // Show only the last 4 chars so the panel never exposes the full key
+    el.keyStatus.textContent = `Key gespeichert (…${key.slice(-4)})`;
+  }
+}
+
+el.keySaveBtn.addEventListener("click", () => {
+  const key = el.keyInput.value.trim();
+  if (!key) {
+    setStatus("Bitte zuerst einen API-Key einfügen.", "error");
+    return;
+  }
+  saveApiKey(key);
+  el.keyInput.value = "";
+  refreshKeyUI();
+  setStatus("API-Key gespeichert. Er bleibt nur in diesem Browser.", "ok");
+});
+
+el.keyChangeBtn.addEventListener("click", () => {
+  localStorage.removeItem(KEY_STORAGE);
+  refreshKeyUI();
+  el.keyInput.focus();
+});
+
+refreshKeyUI();
+
+// Elevation preference doesn't apply to sightseeing routes (yet) – grey it out
+document.querySelectorAll('input[name="charPref"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    const disableElev = charPref() === "sightseeing"; // green mode uses round trips again → HM filter works there
+    document.querySelectorAll('input[name="elevPref"]').forEach((r) => {
+      r.disabled = disableElev;
+    });
+    document.querySelector('.segments[aria-label="Höhenmeter-Präferenz"]')
+      .classList.toggle("segments-disabled", disableElev);
+  });
+});
+
+// ---------- Route generation ----------
+const CANDIDATE_COUNT = 5; // seeds per click when filtering by elevation (free-tier friendly)
+
+function elevationPref() {
+  return document.querySelector('input[name="elevPref"]:checked').value;
+}
+
+// Fetch a single round-trip route for a given seed. Returns the GeoJSON feature.
+async function fetchRoute(apiKey, targetMeters, seed, extraOptions = null) {
+  const body = {
+    // ORS expects [lon, lat] – Leaflet uses [lat, lng]!
+    coordinates: [[state.start.lng, state.start.lat]],
+    elevation: true, // response coords become [lon, lat, ele]
+    options: {
+      round_trip: {
+        length: targetMeters,
+        points: 4,
+        seed: seed,
+      },
+      ...(extraOptions || {}),
+    },
+  };
+
+  const response = await fetch(ORS_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    // Try to surface the ORS error message for easier debugging
+    let detail = "";
+    try {
+      const errJson = await response.json();
+      detail = errJson?.error?.message || JSON.stringify(errJson.error) || "";
+    } catch (_) { /* body not JSON – ignore */ }
+    if (response.status === 401 || response.status === 403) {
+      detail += " – Key ungültig? Über „Ändern“ neu eintragen.";
+    }
+    throw new Error(`ORS ${response.status}: ${detail || response.statusText}`);
+  }
+
+  const geojson = await response.json();
+  const feature = geojson.features?.[0];
+  if (!feature) throw new Error("ORS-Antwort enthält keine Route.");
+  return feature;
+}
+
+// ---------- Waypoint modes: Sightseeing (Phase 3) & Grün (Phase 4) ----------
+function charPref() {
+  return document.querySelector('input[name="charPref"]:checked').value;
+}
+
+// Overpass queries per mode – green areas are ways/relations, so "out center"
+// directly gives us their centroids (spec: Zentroide als Wegpunkte)
+function overpassQuery(mode, radius, lat, lng) {
+  const r = Math.round(radius);
+  if (mode === "gruen") {
+    return `[out:json][timeout:25];
+(
+  way["leisure"~"park|nature_reserve"](around:${r},${lat},${lng});
+  relation["leisure"~"park|nature_reserve"](around:${r},${lat},${lng});
+  way["landuse"="forest"](around:${r},${lat},${lng});
+  relation["landuse"="forest"](around:${r},${lat},${lng});
+);
+out bb 60;`;
+  }
+  return `[out:json][timeout:25];
+(
+  node["tourism"~"attraction|viewpoint|artwork"](around:${r},${lat},${lng});
+  node["historic"~"monument|memorial|castle"](around:${r},${lat},${lng});
+  way["tourism"~"attraction"](around:${r},${lat},${lng});
+  way["historic"~"monument|castle"](around:${r},${lat},${lng});
+);
+out bb 60;`;
+}
+
+// Load POIs / green areas around the start via Overpass (with cache – fair use)
+async function fetchPOIs(lat, lng, radius, mode) {
+  const cacheKey = `${mode}:${lat.toFixed(4)},${lng.toFixed(4)},${Math.round(radius)}`;
+  if (state.poiCache.has(cacheKey)) return state.poiCache.get(cacheKey);
+
+  const query = overpassQuery(mode, radius, lat, lng);
+
+  // Try mirrors in order; overload errors (429/503/504) move to the next one
+  let lastError = null;
+  let json = null;
+  for (const url of OVERPASS_URLS) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: query,
+      });
+      if (response.ok) {
+        json = await response.json();
+        break;
+      }
+      lastError = new Error(`Overpass ${response.status}: POI-Abfrage fehlgeschlagen.`);
+      // 4xx apart from rate limiting won't improve on another mirror
+      if (![429, 503, 504].includes(response.status)) break;
+      setStatus("Overpass-Server überlastet – probiere Ausweich-Server …");
+    } catch (err) {
+      lastError = err; // network error → try next mirror
+    }
+  }
+  if (!json) throw lastError || new Error("Overpass: POI-Abfrage fehlgeschlagen.");
+
+  const pois = (json.elements || [])
+    .map((e) => {
+      const b = e.bounds || null; // ways/relations: bbox from "out bb"
+      return {
+        lat: e.lat ?? (b ? (b.minlat + b.maxlat) / 2 : e.center?.lat),
+        lng: e.lon ?? (b ? (b.minlon + b.maxlon) / 2 : e.center?.lon),
+        bounds: b,
+        name: e.tags?.name || labelForTags(e.tags),
+        named: Boolean(e.tags?.name),
+        importance: importanceScore(e.tags),
+        kind: kindForTags(e.tags),
+      };
+    })
+    .filter((p) => p.lat != null && p.lng != null);
+
+  state.poiCache.set(cacheKey, pois);
+  return pois;
+}
+
+// Universal importance heuristic from OSM data itself – no manual curation:
+// Wikipedia/Wikidata link = notable, big categories beat small ones,
+// richly tagged elements beat barely-tagged clutter.
+function importanceScore(tags = {}) {
+  let score = 0;
+  if (tags.wikipedia || tags.wikidata) score += 3;          // strongest notability signal
+  if (tags.historic === "castle") score += 2;
+  if (tags.tourism === "attraction") score += 2;
+  if (tags.tourism === "viewpoint") score += 1;
+  if (tags.heritage) score += 1;                            // listed/protected sites
+  if (tags.leisure === "nature_reserve") score += 2;        // green mode: reserves beat plain lawns
+  if (tags.leisure === "park" && tags.name) score += 1;     // named parks over anonymous patches
+  if (tags.name) score += 1;
+  score += Math.min(Object.keys(tags).length, 10) / 10;     // mapping attention as proxy
+  return score;
+}
+
+function labelForTags(tags = {}) {
+  if (tags.historic === "castle") return "Schloss/Burg";
+  if (tags.historic === "monument") return "Denkmal";
+  if (tags.historic === "memorial") return "Gedenkstätte";
+  if (tags.tourism === "viewpoint") return "Aussichtspunkt";
+  if (tags.tourism === "artwork") return "Kunstwerk";
+  if (tags.leisure === "park") return "Park";
+  if (tags.leisure === "nature_reserve") return "Naturschutzgebiet";
+  if (tags.landuse === "forest") return "Wald";
+  return "Sehenswürdigkeit";
+}
+
+// Machine-readable category for AI wish matching ("Statue und Schloss")
+function kindForTags(tags = {}) {
+  if (tags.historic === "castle") return "schloss";
+  if (tags.historic === "monument") return "denkmal";
+  if (tags.historic === "memorial") return "gedenkstaette";
+  if (tags.tourism === "viewpoint") return "aussichtspunkt";
+  if (tags.tourism === "artwork") return "kunstwerk";
+  if (tags.tourism === "attraction") return "attraktion";
+  if (tags.leisure === "park") return "park";
+  if (tags.leisure === "nature_reserve") return "naturschutzgebiet";
+  if (tags.landuse === "forest") return "wald";
+  return "sonstiges";
+}
+
+// Pick 4-6 POIs roughly on a ring around the start, spread across directions.
+// Ring radius r so that a loop through them lands near the target: 2πr ≈ D → r ≈ D/6.
+function selectRingPOIs(pois, start, targetMeters, ringScale = 1, wantedOverride = null) {
+  const ringRadius = (targetMeters / 6) * ringScale;
+  const startPt = [start.lng, start.lat];
+  const wanted = wantedOverride ?? (targetMeters < 7000 ? 4 : 6);
+  const sectors = wanted; // one POI per direction sector for an even spread
+
+  // Score each POI: distance from the ideal ring, discounted by importance –
+  // a notable sight "wins" against clutter at a similar ring position
+  const scored = pois.map((p) => {
+    const d = haversine(startPt, [p.lng, p.lat]);
+    const bearing = Math.atan2(p.lng - start.lng, p.lat - start.lat); // rough, fine for bucketing
+    const sector = Math.floor(((bearing + Math.PI) / (2 * Math.PI)) * sectors) % sectors;
+    let score = Math.abs(d - ringRadius);
+    score /= 1 + (p.importance || 0);       // importance 0..7+ → big sights dominate
+    if (state.poiFocus && state.poiFocus.has(p.kind)) {
+      score /= 4;                           // AI wish: requested kinds win their sector
+    }
+    score *= 0.8 + Math.random() * 0.4;     // jitter → "Neue Variante" picks differently
+    return { ...p, sector, score, dist: d };
+  })
+  // Ignore POIs glued to the start or way outside the ring zone
+  .filter((p) => p.dist > ringRadius * 0.3 && p.dist < ringRadius * 2.2);
+
+  // Best POI per sector, then top up if some sectors are empty
+  const bySector = new Map();
+  for (const p of scored) {
+    if (!bySector.has(p.sector) || p.score < bySector.get(p.sector).score) {
+      bySector.set(p.sector, p);
+    }
+  }
+  let picked = [...bySector.values()];
+
+  if (picked.length < wanted) {
+    const rest = scored
+      .filter((p) => !picked.includes(p))
+      .sort((a, b) => a.score - b.score);
+    picked = picked.concat(rest.slice(0, wanted - picked.length));
+  }
+  return picked.slice(0, wanted);
+}
+
+// Order waypoints greedily (nearest neighbor) – plenty good for ≤6 points
+function nearestNeighborOrder(start, pois) {
+  const remaining = [...pois];
+  const ordered = [];
+  let current = [start.lng, start.lat];
+
+  while (remaining.length > 0) {
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    remaining.forEach((p, i) => {
+      const d = haversine(current, [p.lng, p.lat]);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    });
+    const next = remaining.splice(bestIdx, 1)[0];
+    ordered.push(next);
+    current = [next.lng, next.lat];
+  }
+  return ordered;
+}
+
+// Large areas (Theresienwiese, Hofgarten, big parks) should be RUN THROUGH,
+// not just touched at the centre: two waypoints along the long axis force
+// the route to traverse them lengthwise. Small POIs stay a single point.
+const TRAVERSE_MIN_DIAGONAL = 350; // metres of bbox diagonal before we traverse
+
+function traversalPoints(poi) {
+  const b = poi.bounds;
+  if (!b) return null; // nodes (statues etc.) have no extent
+  const diag = haversine([b.minlon, b.minlat], [b.maxlon, b.maxlat]);
+  if (diag < TRAVERSE_MIN_DIAGONAL) return null;
+
+  const midLat = (b.minlat + b.maxlat) / 2;
+  const midLon = (b.minlon + b.maxlon) / 2;
+  const widthM = haversine([b.minlon, midLat], [b.maxlon, midLat]);
+  const heightM = haversine([midLon, b.minlat], [midLon, b.maxlat]);
+
+  // Two points at 25% / 75% along the longer axis, through the centre line
+  if (widthM >= heightM) {
+    const span = b.maxlon - b.minlon;
+    return [
+      [b.minlon + span * 0.25, midLat],
+      [b.minlon + span * 0.75, midLat],
+    ];
+  }
+  const span = b.maxlat - b.minlat;
+  return [
+    [midLon, b.minlat + span * 0.25],
+    [midLon, b.minlat + span * 0.75],
+  ];
+}
+
+// Build the ORS waypoint list: single point for small POIs, entry+exit
+// along the long axis for large areas (nearer end first – no backtracking)
+function buildWaypoints(start, orderedPois) {
+  const waypoints = [[start.lng, start.lat]];
+  let current = [start.lng, start.lat];
+
+  for (const p of orderedPois) {
+    const trav = traversalPoints(p);
+    if (trav) {
+      const [a, b] = trav;
+      const nearFirst = haversine(current, a) <= haversine(current, b) ? [a, b] : [b, a];
+      waypoints.push(...nearFirst);
+      current = nearFirst[1];
+    } else {
+      waypoints.push([p.lng, p.lat]);
+      current = [p.lng, p.lat];
+    }
+  }
+
+  waypoints.push([start.lng, start.lat]);
+  return waypoints;
+}
+
+// Route through explicit waypoints (start → POIs → start), no round_trip option
+async function fetchWaypointRoute(apiKey, waypoints) {
+  const body = {
+    coordinates: waypoints, // [[lon, lat], ...] – ORS order!
+    elevation: true,
+  };
+
+  const response = await fetch(ORS_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errJson = await response.json();
+      detail = errJson?.error?.message || JSON.stringify(errJson.error) || "";
+    } catch (_) { /* ignore */ }
+    if (response.status === 401 || response.status === 403) {
+      detail += " – Key ungültig? Über „Ändern“ neu eintragen.";
+    }
+    throw new Error(`ORS ${response.status}: ${detail || response.statusText}`);
+  }
+
+  const geojson = await response.json();
+  const feature = geojson.features?.[0];
+  if (!feature) throw new Error("ORS-Antwort enthält keine Route.");
+  return feature;
+}
+
+// Mode config: what to search, how many waypoints, how to talk about it
+const WAYPOINT_MODES = {
+  sightseeing: {
+    searchLabel: "Suche Sehenswürdigkeiten in der Umgebung …",
+    routeLabel: (n) => `Berechne Route über ${n} Sehenswürdigkeiten …`,
+    emptyError: "Zu wenige Sehenswürdigkeiten im Umkreis gefunden. Anderen Startpunkt oder größere Distanz probieren.",
+    wanted: (m) => (m < 7000 ? 4 : 6),
+    minPicked: 3,
+    markerFill: "#ffffff",
+  },
+  gruen: {
+    searchLabel: "Suche Parks und Wälder in der Umgebung …",
+    routeLabel: (n) => `Berechne Route über ${n} Grünflächen …`,
+    emptyError: "Zu wenige Grünflächen im Umkreis gefunden. Anderen Startpunkt oder größere Distanz probieren.",
+    wanted: (m) => (m < 6000 ? 2 : m < 12000 ? 3 : 4), // spec: 2-4 Zentroide
+    minPicked: 2,
+    markerFill: "#1d7a4f",
+  },
+};
+
+async function generateWaypointRouteForMode(apiKey, targetMeters, mode) {
+  const cfg = WAYPOINT_MODES[mode];
+  setStatus(cfg.searchLabel);
+  const searchRadius = Math.min(Math.max(targetMeters / 3, 1000), 6000); // spec: ≈ D/3, capped for Overpass fair use
+  const pois = await fetchPOIs(state.start.lat, state.start.lng, searchRadius, mode);
+
+  if (pois.length < cfg.minPicked) {
+    throw new Error(cfg.emptyError);
+  }
+
+  // Attempt 1 with the ideal ring, one corrective retry if length is off >20%
+  let ringScale = 1;
+  let feature = null;
+  let picked = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    picked = selectRingPOIs(pois, state.start, targetMeters, ringScale, cfg.wanted(targetMeters));
+    if (picked.length < cfg.minPicked) {
+      throw new Error("Nicht genug passend verteilte Wegpunkte für einen Rundkurs gefunden.");
+    }
+
+    const ordered = nearestNeighborOrder(state.start, picked);
+    const waypoints = buildWaypoints(state.start, ordered);
+
+    setStatus(cfg.routeLabel(picked.length));
+    feature = await fetchWaypointRoute(apiKey, waypoints);
+
+    const actual = feature.properties?.summary?.distance || 0;
+    const deviation = (actual - targetMeters) / targetMeters;
+    if (Math.abs(deviation) <= 0.2 || attempt === 2) break;
+
+    // Route too long → shrink the ring, too short → widen it
+    ringScale *= targetMeters / actual;
+    setStatus("Passe Wegpunkt-Auswahl an die Ziellänge an …");
+  }
+
+  drawPOIMarkers(picked, cfg.markerFill);
+  return feature;
+}
+
+function drawPOIMarkers(pois, fillColor = "#ffffff") {
+  clearPOIMarkers();
+  state.poiLayer = L.layerGroup(
+    pois.map((p) =>
+      L.circleMarker([p.lat, p.lng], {
+        radius: 7,
+        color: "#0e1b16",
+        weight: 2,
+        fillColor: fillColor,
+        fillOpacity: 1,
+      }).bindPopup(p.name)
+    )
+  ).addTo(map);
+}
+
+function clearPOIMarkers() {
+  if (state.poiLayer) {
+    map.removeLayer(state.poiLayer);
+    state.poiLayer = null;
+  }
+}
+
+// Generate one round trip (pref "egal") or pick best of N candidates by
+// elevation gain. Returns { chosen, note }.
+async function roundTripBestRoute(apiKey, lengthMeters, pref, extraOptions, character) {
+  if (pref === "egal") {
+    setStatus(character === "gruen" ? "Berechne grüne Route …" : "Route wird berechnet …");
+    const chosen = await fetchRoute(apiKey, lengthMeters, state.seed, extraOptions);
+    return { chosen, note: "" };
+  }
+
+  // Several candidates with different seeds, ranked by smoothed elevation gain
+  setStatus(`Berechne ${CANDIDATE_COUNT} Varianten und vergleiche Höhenmeter …`);
+  const seeds = Array.from({ length: CANDIDATE_COUNT }, (_, i) => state.seed + i * 7919);
+
+  const settled = await Promise.allSettled(
+    seeds.map((seed) => fetchRoute(apiKey, lengthMeters, seed, extraOptions))
+  );
+  const candidates = settled
+    .filter((r) => r.status === "fulfilled")
+    .map((r) => r.value);
+
+  if (candidates.length === 0) {
+    throw settled[0].reason; // all failed – surface the first error
+  }
+
+  candidates.forEach((c) => {
+    c._gain = computeGains(c.geometry.coordinates).ascent;
+  });
+  candidates.sort((a, b) => a._gain - b._gain);
+
+  const chosen = pref === "flach" ? candidates[0] : candidates[candidates.length - 1];
+  const gains = candidates.map((c) => Math.round(c._gain));
+  const note = ` ${pref === "flach" ? "Flachste" : "Hügeligste"} von ${candidates.length} Varianten (Spanne ${gains[0]}–${gains[gains.length - 1]} hm).`;
+  return { chosen, note };
+}
+
+async function generateRoute({ newSeed } = {}) {
+  if (!state.start) return;
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    setStatus("Kein API-Key hinterlegt. Oben im Panel eintragen (kostenloser Key auf openrouteservice.org).", "error");
+    return;
+  }
+
+  if (newSeed) {
+    // Random seed → different route(s) with identical settings
+    state.seed = Math.floor(Math.random() * 100000);
+  }
+
+  const targetMeters = Number(el.distance.value) * 1000;
+  const pref = elevationPref();
+
+  setLoading(true);
+
+  try {
+    let chosen;
+    let note = "";
+    const character = charPref();
+
+    if (character === "sightseeing") {
+      // POI-based loop – elevation preference doesn't apply here (yet)
+      chosen = await generateWaypointRouteForMode(apiKey, targetMeters, "sightseeing");
+      note = " Wegpunkte antippen zeigt ihre Namen.";
+    } else if (character === "gruen" && state.greenWeightingBroken) {
+      // ORS already rejected the weighting this session – don't waste requests
+      chosen = await generateWaypointRouteForMode(apiKey, targetMeters, "gruen");
+      note = " Route über Park- und Wald-Wegpunkte.";
+    } else {
+      clearPOIMarkers();
+      // Green mode: let the ROUTER prefer green ways on every metre of the
+      // round trip. Flat number format – the nested {factor} form gets a 400
+      // from the public v2 API (verified in the console).
+      const extraOptions = character === "gruen"
+        ? { profile_params: { weightings: { green: 0.9 } } }
+        : null;
+
+      try {
+        if (character === "gruen") {
+          // Green detours inflate the route (observed ~1.5x) → request a
+          // shorter length and self-calibrate the factor from the results
+          let result = null;
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            const adjusted = Math.round(targetMeters * state.greenLengthFactor);
+            result = await roundTripBestRoute(apiKey, adjusted, pref, extraOptions, character);
+
+            const actual = result.chosen.properties?.summary?.distance || 0;
+            if (actual > 0) {
+              // Learn the local green stretch factor for this session (clamped)
+              state.greenLengthFactor = Math.min(1.2,
+                Math.max(0.35, state.greenLengthFactor * (targetMeters / actual)));
+            }
+            const deviation = Math.abs(actual - targetMeters) / targetMeters;
+            if (deviation <= 0.15 || attempt === 2) break;
+            setStatus("Grüne Route weicht von der Ziellänge ab – kalibriere nach …");
+          }
+          chosen = result.chosen;
+          note = result.note + " Grün-Gewichtung aktiv: Wege durch Parks, Wälder und am Wasser werden bevorzugt.";
+        } else {
+          const result = await roundTripBestRoute(apiKey, targetMeters, pref, extraOptions, character);
+          chosen = result.chosen;
+          note = result.note;
+        }
+      } catch (err) {
+        if (character !== "gruen") throw err;
+        // Public API may not support green weighting with round_trip –
+        // fall back to the Phase-4 waypoint approach instead of failing
+        if (String(err.message).includes("ORS 400")) {
+          state.greenWeightingBroken = true; // remember: retrying won't help this session
+        }
+        console.warn("Green weighting round trip failed, falling back to waypoints:", err);
+        setStatus("Grün-Gewichtung nicht verfügbar – nutze Park-Wegpunkte als Fallback …");
+        chosen = await generateWaypointRouteForMode(apiKey, targetMeters, "gruen");
+        note = " (Fallback: Route über Park-Wegpunkte.)";
+      }
+    }
+
+    state.routeGeoJSON = chosen;
+    drawRoute(chosen);
+    showStats(chosen);
+    renderElevationChart(chosen);
+    setStatus(`Route bereit.${note} „Neue Variante“ probiert andere Verläufe.`, "ok");
+  } catch (err) {
+    console.error("Route generation failed:", err);
+    setStatus(`Fehler: ${err.message} – Details in der Browser-Konsole (F12).`, "error");
+  } finally {
+    setLoading(false);
+  }
+}
+
+function drawRoute(feature) {
+  if (state.routeLayer) map.removeLayer(state.routeLayer);
+
+  state.routeLayer = L.geoJSON(feature, {
+    style: {
+      color: "#e8490f",
+      weight: 5,
+      opacity: 0.9,
+    },
+  }).addTo(map);
+
+  map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+}
+
+// ---------- Stats display ----------
+function showStats(feature) {
+  const summary = feature.properties?.summary || {};
+  const distanceKm = (summary.distance || 0) / 1000;
+
+  // Smoothed gains – raw SRTM data is noisy and inflates cumulative ascent
+  const gains = computeGains(feature.geometry.coordinates);
+
+  el.statDistance.textContent = distanceKm.toFixed(2);
+  el.statDuration.textContent = formatDuration(distanceKm * paceSecondsPerKm());
+  el.statElevation.textContent = `${Math.round(gains.ascent)}/${Math.round(gains.descent)}`;
+  el.result.classList.add("visible");
+
+  // Warn if the round trip deviates a lot from the requested length
+  const target = Number(el.distance.value);
+  const deviation = Math.abs(distanceKm - target) / target;
+  if (deviation > 0.15) {
+    setStatus(
+      `Hinweis: Route ist ${distanceKm.toFixed(1)} km statt ${target.toFixed(1)} km – ORS-Rundkurse weichen manchmal ab. „Neue Variante“ versuchen.`,
+    );
+  }
+}
+
+// ---------- Elevation math ----------
+// Raw elevation data (SRTM-based) carries ±1-3 m noise per point. Summing every
+// positive diff inflates ascent massively (the "199 hm in flat Munich" effect).
+// Fix: moving-average smoothing + hysteresis threshold, like GPS watches do.
+
+const SMOOTH_WINDOW = 7;        // moving average window (points)
+const GAIN_THRESHOLD = 2.0;     // metres a climb must exceed before it counts
+
+function smoothElevations(coords) {
+  // coords: [[lon, lat, ele], ...] → smoothed elevation array
+  const eles = coords.map((c) => c[2] || 0);
+  const half = Math.floor(SMOOTH_WINDOW / 2);
+  const smoothed = new Array(eles.length);
+
+  for (let i = 0; i < eles.length; i++) {
+    const from = Math.max(0, i - half);
+    const to = Math.min(eles.length - 1, i + half);
+    let sum = 0;
+    for (let j = from; j <= to; j++) sum += eles[j];
+    smoothed[i] = sum / (to - from + 1);
+  }
+  return smoothed;
+}
+
+function computeGains(coords) {
+  // Hysteresis accumulator: only elevation changes larger than the threshold
+  // (relative to the last accepted reference) count as real ascent/descent.
+  const smoothed = smoothElevations(coords);
+  let ascent = 0;
+  let descent = 0;
+  let ref = smoothed[0] || 0;
+
+  for (let i = 1; i < smoothed.length; i++) {
+    const diff = smoothed[i] - ref;
+    if (diff >= GAIN_THRESHOLD) {
+      ascent += diff;
+      ref = smoothed[i];
+    } else if (diff <= -GAIN_THRESHOLD) {
+      descent += -diff;
+      ref = smoothed[i];
+    }
+  }
+  return { ascent, descent };
+}
+
+// Haversine distance in metres between two [lon, lat] points
+function haversine(a, b) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// ---------- Elevation profile chart ----------
+function renderElevationChart(feature) {
+  const coords = feature.geometry.coordinates;
+  const smoothed = smoothElevations(coords);
+
+  // Cumulative distance along the route (km) as X axis
+  const dist = new Array(coords.length);
+  dist[0] = 0;
+  for (let i = 1; i < coords.length; i++) {
+    dist[i] = dist[i - 1] + haversine(coords[i - 1], coords[i]);
+  }
+
+  // Downsample to ~150 points – keeps the chart snappy on mobile
+  const step = Math.max(1, Math.floor(coords.length / 150));
+  const points = [];
+  for (let i = 0; i < coords.length; i += step) {
+    points.push({ x: dist[i] / 1000, y: smoothed[i] });
+  }
+  // Always include the final point so the loop closes visually
+  points.push({ x: dist[dist.length - 1] / 1000, y: smoothed[smoothed.length - 1] });
+
+  if (state.chart) state.chart.destroy();
+
+  state.chart = new Chart(el.elevChart, {
+    type: "line",
+    data: {
+      datasets: [{
+        data: points,
+        borderColor: "#e8490f",
+        backgroundColor: "rgba(232, 73, 15, 0.12)",
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.25,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false,
+          callbacks: {
+            title: (items) => `km ${items[0].parsed.x.toFixed(1)}`,
+            label: (item) => `${Math.round(item.parsed.y)} m`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: false },
+          ticks: {
+            font: { family: "'IBM Plex Mono', monospace", size: 10 },
+            callback: (v) => `${v} km`,
+            maxTicksLimit: 6,
+          },
+          grid: { display: false },
+        },
+        y: {
+          ticks: {
+            font: { family: "'IBM Plex Mono', monospace", size: 10 },
+            callback: (v) => `${v} m`,
+            maxTicksLimit: 4,
+          },
+          grid: { color: "#eef1ef" },
+        },
+      },
+    },
+  });
+
+  el.chartWrap.classList.add("visible");
+}
+
+function paceSecondsPerKm() {
+  // Parse "m:ss" or plain minutes; fall back to 6:00 min/km
+  const raw = el.pace.value.trim();
+  const match = raw.match(/^(\d{1,2})(?::([0-5]?\d))?$/);
+  if (!match) return 360;
+  return Number(match[1]) * 60 + Number(match[2] || 0);
+}
+
+function formatDuration(totalSeconds) {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.round((totalSeconds % 3600) / 60);
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}h` : `${m}min`;
+}
+
+// ---------- GPX export ----------
+function downloadGPX() {
+  if (!state.routeGeoJSON) return;
+
+  const coords = state.routeGeoJSON.geometry.coordinates;
+  const points = coords
+    .map(([lon, lat, ele]) => {
+      const eleTag = ele != null ? `<ele>${ele.toFixed(1)}</ele>` : "";
+      return `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}">${eleTag}</trkpt>`;
+    })
+    .join("\n");
+
+  const distanceKm = ((state.routeGeoJSON.properties?.summary?.distance || 0) / 1000).toFixed(1);
+  const date = new Date().toISOString().slice(0, 10);
+  const name = `RunRoute ${distanceKm} km`;
+
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="RunRoute" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>${name}</name>
+    <trkseg>
+${points}
+    </trkseg>
+  </trk>
+</gpx>`;
+
+  const blob = new Blob([gpx], { type: "application/gpx+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `runroute-${date}-${distanceKm}km.gpx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- AI wish parsing (Phase 6) ----------
+// The LLM ONLY translates free text into a filter object. All geodata stays
+// deterministic (Overpass/ORS) – the model never invents coordinates.
+const AI_SYSTEM_PROMPT = `Du übersetzt Laufwünsche in JSON. Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne Erklärung.
+Felder (alle optional, weglassen wenn nicht erwähnt):
+- "distance_km": Zahl
+- "elevation": "flach" | "egal" | "huegelig"
+- "character": "standard" | "sightseeing" | "gruen"
+- "poi_focus": Array aus "schloss", "denkmal", "gedenkstaette", "aussichtspunkt", "kunstwerk", "attraktion", "park", "wald"
+
+Regeln: Statuen/Skulpturen → "denkmal" und "kunstwerk". Burgen → "schloss". Natur/Fluss/Wasser/grün → character "gruen". Sehenswürdigkeiten/POIs erwähnt → character "sightseeing". Steigung/Hügel/Berge → elevation "huegelig", flach/eben → "flach".
+Beispiel: "12 km, gern eine Statue und ein Schloss sehen" → {"distance_km":12,"character":"sightseeing","poi_focus":["denkmal","kunstwerk","schloss"]}`;
+
+async function parseWish(aiKey, text) {
+  const raw = aiProvider(aiKey) === "gemini"
+    ? await callGemini(aiKey, text)
+    : await callAnthropic(aiKey, text);
+
+  // Strip possible code fences before parsing
+  const clean = raw.replace(/```json|```/g, "").trim();
+  try {
+    return JSON.parse(clean);
+  } catch (_) {
+    throw new Error("KI-Antwort war kein gültiges JSON. Nochmal probieren.");
+  }
+}
+
+async function callAnthropic(aiKey, text) {
+  const response = await fetch(ANTHROPIC_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": aiKey,
+      "anthropic-version": "2023-06-01",
+      // Official opt-in for browser-side "bring your own key" apps
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 300,
+      system: AI_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: text }],
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errJson = await response.json();
+      detail = errJson?.error?.message || "";
+    } catch (_) { /* ignore */ }
+    if (response.status === 401) detail += " – Anthropic-Key ungültig?";
+    throw new Error(`Anthropic ${response.status}: ${detail || response.statusText}`);
+  }
+
+  const data = await response.json();
+  return (data.content || [])
+    .filter((c) => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
+}
+
+async function callGemini(aiKey, text) {
+  const response = await fetch(GEMINI_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": aiKey,
+    },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: AI_SYSTEM_PROMPT }] },
+      contents: [{ parts: [{ text: text }] }],
+      generationConfig: { maxOutputTokens: 300 },
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errJson = await response.json();
+      detail = errJson?.error?.message || "";
+    } catch (_) { /* ignore */ }
+    if (response.status === 400 || response.status === 403) detail += " – Gemini-Key ungültig?";
+    if (response.status === 429) detail += " – Gratis-Limit erreicht, kurz warten.";
+    throw new Error(`Gemini ${response.status}: ${detail || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  return parts.map((p) => p.text || "").join("\n");
+}
+
+function applyIntent(intent) {
+  const applied = [];
+
+  if (typeof intent.distance_km === "number" && intent.distance_km >= 2) {
+    const clamped = Math.min(30, intent.distance_km);
+    el.distance.value = clamped;
+    el.distanceValue.textContent = Number(clamped).toFixed(1);
+    applied.push(`${clamped} km`);
+  }
+
+  if (["flach", "egal", "huegelig"].includes(intent.elevation)) {
+    const radio = document.querySelector(`input[name="elevPref"][value="${intent.elevation}"]`);
+    if (radio && !radio.disabled) {
+      radio.checked = true;
+      applied.push(intent.elevation);
+    }
+  }
+
+  if (["standard", "sightseeing", "gruen"].includes(intent.character)) {
+    const radio = document.querySelector(`input[name="charPref"][value="${intent.character}"]`);
+    if (radio) {
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change")); // updates the HM-disabled state
+      applied.push(intent.character);
+    }
+  }
+
+  if (Array.isArray(intent.poi_focus) && intent.poi_focus.length > 0) {
+    state.poiFocus = new Set(intent.poi_focus);
+    applied.push(`Fokus: ${intent.poi_focus.join(", ")}`);
+  } else {
+    state.poiFocus = null;
+  }
+
+  return applied;
+}
+
+async function handleWish() {
+  const text = el.aiWish.value.trim();
+  if (!text) {
+    setStatus("Beschreib erst deinen Wunsch-Lauf im Textfeld.", "error");
+    return;
+  }
+  if (!state.start) {
+    setStatus("Erst auf die Karte tippen und einen Startpunkt setzen.", "error");
+    return;
+  }
+  const aiKey = getAiKey();
+  if (!aiKey) {
+    setStatus("Kein KI-Key hinterlegt. Gratis-Key: aistudio.google.com – oder Anthropic-Key von console.anthropic.com.", "error");
+    return;
+  }
+
+  el.aiBtn.disabled = true;
+  setStatus("KI übersetzt deinen Wunsch …");
+
+  try {
+    const intent = await parseWish(aiKey, text);
+    const applied = applyIntent(intent);
+    if (applied.length === 0) {
+      setStatus("Daraus konnte ich keine Filter ableiten – probier's konkreter (Distanz, Grün, Sehenswürdigkeiten …).", "error");
+      return;
+    }
+    setStatus(`Verstanden: ${applied.join(" · ")}. Generiere …`, "ok");
+    await generateRoute();
+  } catch (err) {
+    console.error("AI wish failed:", err);
+    setStatus(`Fehler: ${err.message}`, "error");
+  } finally {
+    el.aiBtn.disabled = false;
+  }
+}
+
+// AI key UI (same pattern as the ORS key)
+function refreshAiKeyUI() {
+  const key = getAiKey();
+  const hasKey = key.length > 0;
+  el.aiKeyEntry.hidden = hasKey;
+  el.aiKeySaved.hidden = !hasKey;
+  if (hasKey) {
+    el.aiKeyStatus.textContent = `KI-Key gespeichert (…${key.slice(-4)})`;
+  }
+}
+
+el.aiKeySaveBtn.addEventListener("click", () => {
+  const key = el.aiKeyInput.value.trim();
+  if (!key) {
+    setStatus("Bitte zuerst einen Anthropic-Key einfügen.", "error");
+    return;
+  }
+  saveAiKey(key);
+  el.aiKeyInput.value = "";
+  refreshAiKeyUI();
+  setStatus("Anthropic-Key gespeichert. Er bleibt nur in diesem Browser.", "ok");
+});
+
+el.aiKeyChangeBtn.addEventListener("click", () => {
+  localStorage.removeItem(AI_KEY_STORAGE);
+  refreshAiKeyUI();
+  el.aiKeyInput.focus();
+});
+
+el.aiBtn.addEventListener("click", handleWish);
+refreshAiKeyUI();
+
+// ---------- Saved routes (Phase 5: Lieblingsstrecken) ----------
+// Full route geometry lives in localStorage – loading a favourite needs
+// NO network and NO API request. Capped to keep well under the ~5 MB quota.
+const FAV_STORAGE = "runroute_favorites";
+const FAV_MAX = 30;
+
+function loadFavorites() {
+  try {
+    const raw = localStorage.getItem(FAV_STORAGE);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch (_) {
+    return []; // corrupted storage – start fresh rather than crash
+  }
+}
+
+function persistFavorites(favs) {
+  try {
+    localStorage.setItem(FAV_STORAGE, JSON.stringify(favs));
+    return true;
+  } catch (_) {
+    return false; // quota exceeded
+  }
+}
+
+function charLabel(value) {
+  return { standard: "Standard", sightseeing: "Sightseeing", gruen: "Grün" }[value] || value;
+}
+
+function saveCurrentRoute() {
+  if (!state.routeGeoJSON) return;
+
+  const distanceKm = ((state.routeGeoJSON.properties?.summary?.distance || 0) / 1000);
+  const gains = computeGains(state.routeGeoJSON.geometry.coordinates);
+  const now = new Date();
+  const dateLabel = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.`;
+
+  const fav = {
+    id: Date.now(),
+    name: `${distanceKm.toFixed(1)} km · ${charLabel(charPref())} · ${dateLabel}`,
+    ascent: Math.round(gains.ascent),
+    feature: state.routeGeoJSON,
+  };
+
+  const favs = loadFavorites();
+  favs.unshift(fav); // newest first
+  let trimmed = favs.slice(0, FAV_MAX);
+
+  // Quota exceeded? Drop oldest entries until it fits (or give up cleanly)
+  while (!persistFavorites(trimmed) && trimmed.length > 1) {
+    trimmed = trimmed.slice(0, trimmed.length - 1);
+  }
+  if (!persistFavorites(trimmed)) {
+    setStatus("Speichern fehlgeschlagen – Browser-Speicher voll.", "error");
+    return;
+  }
+
+  renderFavList();
+  setStatus(`Gespeichert: ${fav.name} – bleibt in diesem Browser, auch offline ladbar.`, "ok");
+}
+
+function loadFavorite(id) {
+  const fav = loadFavorites().find((f) => f.id === id);
+  if (!fav) return;
+
+  clearPOIMarkers();
+  state.routeGeoJSON = fav.feature;
+  drawRoute(fav.feature);
+  showStats(fav.feature);
+  renderElevationChart(fav.feature);
+  el.variantBtn.disabled = false;
+  el.gpxBtn.disabled = false;
+  el.favSaveBtn.disabled = false;
+  setStatus(`Geladen: ${fav.name} (ohne API-Request).`, "ok");
+}
+
+function deleteFavorite(id) {
+  const favs = loadFavorites();
+  const fav = favs.find((f) => f.id === id);
+  if (!fav) return;
+  if (!confirm(`„${fav.name}“ wirklich löschen?`)) return;
+  persistFavorites(favs.filter((f) => f.id !== id));
+  renderFavList();
+}
+
+function renderFavList() {
+  const favs = loadFavorites();
+  el.favField.hidden = favs.length === 0;
+  el.favList.innerHTML = "";
+
+  for (const fav of favs) {
+    const row = document.createElement("div");
+    row.className = "fav-row";
+
+    const name = document.createElement("div");
+    name.className = "fav-name";
+    name.textContent = fav.name;
+    const sub = document.createElement("small");
+    sub.textContent = `${fav.ascent} hm`;
+    name.appendChild(sub);
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "btn btn-secondary btn-small";
+    loadBtn.textContent = "Laden";
+    loadBtn.addEventListener("click", () => loadFavorite(fav.id));
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-secondary btn-small";
+    delBtn.textContent = "✕";
+    delBtn.setAttribute("aria-label", `${fav.name} löschen`);
+    delBtn.addEventListener("click", () => deleteFavorite(fav.id));
+
+    row.append(name, loadBtn, delBtn);
+    el.favList.appendChild(row);
+  }
+}
+
+el.favSaveBtn.addEventListener("click", saveCurrentRoute);
+renderFavList();
+
+// ---------- Wire up buttons ----------
+el.generateBtn.addEventListener("click", () => generateRoute());
+el.variantBtn.addEventListener("click", () => generateRoute({ newSeed: true }));
+el.gpxBtn.addEventListener("click", downloadGPX);
+</script>
+</body>
+</html>
